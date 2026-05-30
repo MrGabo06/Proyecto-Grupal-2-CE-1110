@@ -32,11 +32,12 @@ const int switchArribaPin = 12;
 
 // =======================
 // Referencias de pisos
+// Ajustar con tus valores reales
 // =======================
 const int pisoRef[5] = {
-  100,  // Piso 1
-  120,  // Piso 2
-  170,  // Piso 3
+  90,  // Piso 1
+  120,   // Piso 2
+  180,  // Piso 3
   250,  // Piso 4
   350   // Piso 5
 };
@@ -44,9 +45,9 @@ const int pisoRef[5] = {
 // =======================
 // PID
 // =======================
-float Kp = 1.0;
-float Ki = 0.01;
-float Kd = 0.20;
+float Kp = 0.7;
+float Ki = 0.0;
+float Kd = 0.25;
 
 float integral = 0.0;
 float errorAnterior = 0.0;
@@ -57,10 +58,13 @@ const unsigned long Ts_ms = 50;
 // =======================
 // Motor
 // =======================
-const int PWM_MIN = 130;
-const int PWM_MAX = 255;
-const int PWM_LIBERACION = 150;
-const int TOLERANCIA = 5;
+const int PWM_MIN = 90;          // velocidad minima normal
+const int PWM_MAX = 180;         // velocidad maxima reducida
+const int PWM_CERCA = 75;        // velocidad cuando esta cerca del piso
+const int PWM_LIBERACION = 150;  // velocidad para liberar final de carrera
+
+const int TOLERANCIA = 5;        // error aceptable para detenerse
+const int ZONA_LENTA = 30;       // si el error es menor a esto, baja velocidad
 
 // =======================
 // Estado
@@ -74,6 +78,11 @@ int ultimaDireccion = 0; // -1 menor, 0 stop, 1 mayor
 
 unsigned long lastPrintTime = 0;
 const unsigned long printInterval = 200;
+
+// Debounce botones
+bool ultimoEstadoBoton[5] = {HIGH, HIGH, HIGH, HIGH, HIGH};
+unsigned long ultimoTiempoBoton[5] = {0, 0, 0, 0, 0};
+const unsigned long debounceDelay = 80;
 
 void setup() {
   Serial.begin(9600);
@@ -92,7 +101,13 @@ void setup() {
   detenerMotor();
 
   Serial.println("Sistema PID listo");
-  Serial.println("Use botones D2-D6 o escriba 1,2,3,4,5 en Serial");
+  Serial.println("Botones:");
+  Serial.println("D2 = piso 1");
+  Serial.println("D3 = piso 2");
+  Serial.println("D4 = piso 3");
+  Serial.println("D5 = piso 4");
+  Serial.println("D6 = piso 5");
+  Serial.println("Tambien puede escribir 1,2,3,4,5 por Serial");
 }
 
 void loop() {
@@ -106,13 +121,9 @@ void loop() {
 
   imprimirEstado(posicionActual, switchAbajo, switchArriba);
 
-  // =======================
-  // Manejo de finales de carrera
-  // Si toca un final:
-  // 1. Detiene el PID.
-  // 2. Mueve en dirección contraria.
-  // 3. Cuando se suelta, detiene.
-  // =======================
+  // Finales de carrera:
+  // Si se presiona uno, se mueve en direccion contraria
+  // hasta que se libere. Luego se detiene.
   if (manejarFinalesCarrera(switchAbajo, switchArriba)) {
     return;
   }
@@ -142,15 +153,12 @@ bool manejarFinalesCarrera(bool switchAbajo, bool switchArriba) {
     }
 
     if (switchAbajo && !switchArriba) {
-      // Está presionado abajo: moverse hacia arriba / pot mayor
       moverHaciaPotMayor(PWM_LIBERACION);
     } 
     else if (switchArriba && !switchAbajo) {
-      // Está presionado arriba: moverse hacia abajo / pot menor
       moverHaciaPotMenor(PWM_LIBERACION);
     } 
     else {
-      // Si ambos están presionados, detener por seguridad
       detenerMotor();
     }
 
@@ -173,9 +181,23 @@ bool manejarFinalesCarrera(bool switchAbajo, bool switchArriba) {
 // =======================
 void leerBotones() {
   for (int i = 0; i < 5; i++) {
-    if (digitalRead(botonesPiso[i]) == LOW) {
-      seleccionarPiso(i + 1);
-      delay(250);
+    bool lectura = digitalRead(botonesPiso[i]);
+
+    if (lectura != ultimoEstadoBoton[i]) {
+      ultimoTiempoBoton[i] = millis();
+      ultimoEstadoBoton[i] = lectura;
+    }
+
+    if ((millis() - ultimoTiempoBoton[i]) > debounceDelay) {
+      if (lectura == LOW) {
+        seleccionarPiso(i + 1);
+
+        while (digitalRead(botonesPiso[i]) == LOW) {
+          delay(10);
+        }
+
+        ultimoEstadoBoton[i] = HIGH;
+      }
     }
   }
 }
@@ -243,12 +265,18 @@ void ejecutarPID(int posicionActual) {
 
   float salidaPID = Kp * error + Ki * integral + Kd * derivada;
 
-  aplicarSalidaMotor(salidaPID);
+  aplicarSalidaMotor(salidaPID, abs((int)error));
 }
 
-void aplicarSalidaMotor(float salidaPID) {
-  int pwm = abs(salidaPID);
-  pwm = constrain(pwm, PWM_MIN, PWM_MAX);
+void aplicarSalidaMotor(float salidaPID, int errorAbs) {
+  int pwm;
+
+  if (errorAbs <= ZONA_LENTA) {
+    pwm = PWM_CERCA;
+  } else {
+    pwm = abs((int)salidaPID);
+    pwm = constrain(pwm, PWM_MIN, PWM_MAX);
+  }
 
   if (salidaPID > 0) {
     moverHaciaPotMayor(pwm);
