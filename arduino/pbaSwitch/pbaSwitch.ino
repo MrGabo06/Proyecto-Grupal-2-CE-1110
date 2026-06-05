@@ -1,14 +1,9 @@
-// =======================
 // L293D
-// =======================
 const int ENA = 9;   // PWM
 const int IN1 = 7;
 const int IN2 = 8;
 
-// =======================
 // Botones de pisos
-// Cada boton va entre pin y GND
-// =======================
 const int botonesPiso[5] = {
   2,  // Piso 1
   3,  // Piso 2
@@ -17,23 +12,14 @@ const int botonesPiso[5] = {
   6   // Piso 5
 };
 
-// =======================
 // Potenciometro
-// =======================
 const int potPin = A0;
 
-// =======================
 // Finales de carrera
-// COM -> GND
-// NO  -> pin
-// =======================
 const int switchAbajoPin = 11;
 const int switchArribaPin = 12;
 
-// =======================
 // Referencias de pisos
-// Ajustar con tus valores reales
-// =======================
 const int pisoRef[5] = {
   290,  // Piso 1
   350,  // Piso 2
@@ -42,9 +28,7 @@ const int pisoRef[5] = {
   600   // Piso 5
 };
 
-// =======================
 // PID
-// =======================
 float Kp = 0.7;
 float Ki = 0.0;
 float Kd = 0.25;
@@ -53,38 +37,33 @@ float integral = 0.0;
 float errorAnterior = 0.0;
 bool primerCicloPID = true;
 
+float ultimoError = 0.0;
+float ultimoP = 0.0;
+float ultimoI = 0.0;
+float ultimoD = 0.0;
+float ultimaSalidaPID = 0.0;
+
 unsigned long lastPidTime = 0;
 const unsigned long Ts_ms = 50;
 
-// =======================
-// Motor - velocidad normal subiendo
-// =======================
+// Motor
 const int PWM_MIN = 90;
 const int PWM_MAX = 180;
 const int PWM_CERCA = 75;
 
-// =======================
-// Motor - velocidad bajando
-// POT MENOR = bajada
-// =======================
+// Motor bajando
 const int PWM_BAJANDO_MIN = 90;
 const int PWM_BAJANDO_MAX = 130;
 const int PWM_BAJANDO_CERCA = 85;
 
-// =======================
-// Finales de carrera
-// =======================
+// Liberacion
 const int PWM_LIBERACION = 150;
 
-// =======================
 // Control
-// =======================
 const int TOLERANCIA = 5;
 const int ZONA_LENTA = 20;
 
-// =======================
 // Estado
-// =======================
 int pisoObjetivo = -1;
 bool enMovimiento = false;
 bool liberandoFinal = false;
@@ -92,12 +71,14 @@ bool liberandoFinal = false;
 int ultimoPWM = 0;
 int ultimaDireccion = 0; // -1 menor, 0 stop, 1 mayor
 
+// Pruebas
+int numeroPrueba = 0;
+unsigned long tiempoInicioMovimiento = 0;
+
 unsigned long lastPrintTime = 0;
 const unsigned long printInterval = 200;
 
-// =======================
-// Debounce sin bloqueo
-// =======================
+// Debounce
 bool ultimaLecturaBoton[5] = {HIGH, HIGH, HIGH, HIGH, HIGH};
 bool estadoEstableBoton[5] = {HIGH, HIGH, HIGH, HIGH, HIGH};
 unsigned long ultimoTiempoBoton[5] = {0, 0, 0, 0, 0};
@@ -127,6 +108,10 @@ void setup() {
   Serial.println("D5 = piso 4");
   Serial.println("D6 = piso 5");
   Serial.println("Tambien puede escribir 1,2,3,4,5 por Serial");
+
+  Serial.println();
+  Serial.println("CSV_RESULTADOS_PID:");
+  Serial.println("prueba,piso_objetivo,referencia,posicion_final,error_final,tiempo_ms,Kp,Ki,Kd,Ts_ms,resultado");
 }
 
 void loop() {
@@ -152,9 +137,7 @@ void loop() {
   ejecutarPID(posicionActual);
 }
 
-// =======================
 // Finales de carrera
-// =======================
 bool manejarFinalesCarrera(bool switchAbajo, bool switchArriba) {
   if (switchAbajo || switchArriba) {
     enMovimiento = false;
@@ -170,11 +153,9 @@ bool manejarFinalesCarrera(bool switchAbajo, bool switchArriba) {
 
     if (switchAbajo && !switchArriba) {
       moverHaciaPotMayor(PWM_LIBERACION);
-    } 
-    else if (switchArriba && !switchAbajo) {
+    } else if (switchArriba && !switchAbajo) {
       moverHaciaPotMenor(PWM_BAJANDO_MAX);
-    } 
-    else {
+    } else {
       detenerMotor();
     }
 
@@ -192,9 +173,7 @@ bool manejarFinalesCarrera(bool switchAbajo, bool switchArriba) {
   return false;
 }
 
-// =======================
-// Lectura de botones sin bloqueo
-// =======================
+// Botones
 void leerBotones() {
   for (int i = 0; i < 5; i++) {
     bool lectura = digitalRead(botonesPiso[i]);
@@ -216,9 +195,7 @@ void leerBotones() {
   }
 }
 
-// =======================
-// Lectura Serial
-// =======================
+// Serial
 void leerSerial() {
   if (Serial.available() > 0) {
     char entrada = Serial.read();
@@ -233,10 +210,15 @@ void leerSerial() {
   }
 }
 
+// Piso objetivo
 void seleccionarPiso(int piso) {
   pisoObjetivo = piso;
   enMovimiento = true;
   liberandoFinal = false;
+
+  numeroPrueba++;
+  tiempoInicioMovimiento = millis();
+
   resetPID();
 
   Serial.print("Nuevo piso objetivo: ");
@@ -245,9 +227,7 @@ void seleccionarPiso(int piso) {
   Serial.println(pisoRef[pisoObjetivo - 1]);
 }
 
-// =======================
 // PID
-// =======================
 void ejecutarPID(int posicionActual) {
   unsigned long ahora = millis();
 
@@ -262,7 +242,21 @@ void ejecutarPID(int posicionActual) {
   float error = referencia - posicionActual;
   int errorAbs = abs((int)error);
 
+  ultimoError = error;
+
   if (errorAbs <= TOLERANCIA) {
+    unsigned long tiempoTotal = millis() - tiempoInicioMovimiento;
+
+    registrarResultadoPID(
+      numeroPrueba,
+      pisoObjetivo,
+      referencia,
+      posicionActual,
+      errorAbs,
+      tiempoTotal,
+      "CORRECTO"
+    );
+
     detenerMotor();
     enMovimiento = false;
     pisoObjetivo = -1;
@@ -286,18 +280,21 @@ void ejecutarPID(int posicionActual) {
 
   errorAnterior = error;
 
-  float salidaPID = Kp * error + Ki * integral + Kd * derivada;
+  ultimoP = Kp * error;
+  ultimoI = Ki * integral;
+  ultimoD = Kd * derivada;
+
+  float salidaPID = ultimoP + ultimoI + ultimoD;
+  ultimaSalidaPID = salidaPID;
 
   aplicarSalidaMotor(salidaPID, errorAbs);
 }
 
+// Salida motor
 void aplicarSalidaMotor(float salidaPID, int errorAbs) {
   int pwm;
 
   if (salidaPID > 0) {
-    // =======================
-    // Subiendo / POT MAYOR
-    // =======================
     if (errorAbs <= ZONA_LENTA) {
       pwm = PWM_CERCA;
     } else {
@@ -307,9 +304,6 @@ void aplicarSalidaMotor(float salidaPID, int errorAbs) {
 
     moverHaciaPotMayor(pwm);
   } else {
-    // =======================
-    // Bajando / POT MENOR
-    // =======================
     if (errorAbs <= ZONA_LENTA) {
       pwm = PWM_BAJANDO_CERCA;
     } else {
@@ -321,10 +315,45 @@ void aplicarSalidaMotor(float salidaPID, int errorAbs) {
   }
 }
 
-// =======================
+// Registro CSV
+void registrarResultadoPID(
+  int prueba,
+  int piso,
+  int referencia,
+  int posicionFinal,
+  int errorFinal,
+  unsigned long tiempoMs,
+  const char* resultado
+) {
+  Serial.println();
+  Serial.println("RESULTADO_PID:");
+  Serial.println("prueba,piso_objetivo,referencia,posicion_final,error_final,tiempo_ms,Kp,Ki,Kd,Ts_ms,resultado");
+
+  Serial.print(prueba);
+  Serial.print(",");
+  Serial.print(piso);
+  Serial.print(",");
+  Serial.print(referencia);
+  Serial.print(",");
+  Serial.print(posicionFinal);
+  Serial.print(",");
+  Serial.print(errorFinal);
+  Serial.print(",");
+  Serial.print(tiempoMs);
+  Serial.print(",");
+  Serial.print(Kp, 3);
+  Serial.print(",");
+  Serial.print(Ki, 3);
+  Serial.print(",");
+  Serial.print(Kd, 3);
+  Serial.print(",");
+  Serial.print(Ts_ms);
+  Serial.print(",");
+  Serial.println(resultado);
+  Serial.println();
+}
+
 // Potenciometro
-// Igual que el codigo de prueba
-// =======================
 int leerPotPromediado() {
   long suma = 0;
 
@@ -336,9 +365,7 @@ int leerPotPromediado() {
   return suma / 20;
 }
 
-// =======================
-// Motor
-// =======================
+// Movimiento mayor
 void moverHaciaPotMayor(int pwm) {
   digitalWrite(IN1, LOW);
   digitalWrite(IN2, HIGH);
@@ -348,6 +375,7 @@ void moverHaciaPotMayor(int pwm) {
   ultimaDireccion = 1;
 }
 
+// Movimiento menor
 void moverHaciaPotMenor(int pwm) {
   digitalWrite(IN1, HIGH);
   digitalWrite(IN2, LOW);
@@ -357,6 +385,7 @@ void moverHaciaPotMenor(int pwm) {
   ultimaDireccion = -1;
 }
 
+// Parada
 void detenerMotor() {
   analogWrite(ENA, 0);
   digitalWrite(IN1, LOW);
@@ -366,17 +395,26 @@ void detenerMotor() {
   ultimaDireccion = 0;
 }
 
-// =======================
-// Utilidades
-// =======================
+// Reset PID
 void resetPID() {
   integral = 0.0;
   errorAnterior = 0.0;
   primerCicloPID = true;
   lastPidTime = millis();
+
+  ultimoError = 0.0;
+  ultimoP = 0.0;
+  ultimoI = 0.0;
+  ultimoD = 0.0;
+  ultimaSalidaPID = 0.0;
 }
 
+// Monitor serial
 void imprimirEstado(int posicionActual, bool switchAbajo, bool switchArriba) {
+  if (!enMovimiento && !liberandoFinal) {
+    return;
+  }
+
   if (millis() - lastPrintTime >= printInterval) {
     lastPrintTime = millis();
 
@@ -394,6 +432,18 @@ void imprimirEstado(int posicionActual, bool switchAbajo, bool switchArriba) {
 
       Serial.print(" | Error: ");
       Serial.print(ref - posicionActual);
+
+      Serial.print(" | P: ");
+      Serial.print(ultimoP);
+
+      Serial.print(" | I: ");
+      Serial.print(ultimoI);
+
+      Serial.print(" | D: ");
+      Serial.print(ultimoD);
+
+      Serial.print(" | PID: ");
+      Serial.print(ultimaSalidaPID);
     }
 
     Serial.print(" | PWM: ");
