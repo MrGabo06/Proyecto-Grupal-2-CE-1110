@@ -35,11 +35,11 @@ const int switchArribaPin = 12;
 // Ajustar con tus valores reales
 // =======================
 const int pisoRef[5] = {
-  90,  // Piso 1
-  120,   // Piso 2
-  180,  // Piso 3
-  250,  // Piso 4
-  350   // Piso 5
+  290,  // Piso 1
+  350,  // Piso 2
+  450,  // Piso 3
+  530,  // Piso 4
+  600   // Piso 5
 };
 
 // =======================
@@ -51,20 +51,36 @@ float Kd = 0.25;
 
 float integral = 0.0;
 float errorAnterior = 0.0;
+bool primerCicloPID = true;
 
 unsigned long lastPidTime = 0;
 const unsigned long Ts_ms = 50;
 
 // =======================
-// Motor
+// Motor - velocidad normal subiendo
 // =======================
-const int PWM_MIN = 90;          // velocidad minima normal
-const int PWM_MAX = 180;         // velocidad maxima reducida
-const int PWM_CERCA = 75;        // velocidad cuando esta cerca del piso
-const int PWM_LIBERACION = 150;  // velocidad para liberar final de carrera
+const int PWM_MIN = 90;
+const int PWM_MAX = 180;
+const int PWM_CERCA = 75;
 
-const int TOLERANCIA = 5;        // error aceptable para detenerse
-const int ZONA_LENTA = 30;       // si el error es menor a esto, baja velocidad
+// =======================
+// Motor - velocidad bajando
+// POT MENOR = bajada
+// =======================
+const int PWM_BAJANDO_MIN = 90;
+const int PWM_BAJANDO_MAX = 130;
+const int PWM_BAJANDO_CERCA = 85;
+
+// =======================
+// Finales de carrera
+// =======================
+const int PWM_LIBERACION = 150;
+
+// =======================
+// Control
+// =======================
+const int TOLERANCIA = 5;
+const int ZONA_LENTA = 20;
 
 // =======================
 // Estado
@@ -79,8 +95,11 @@ int ultimaDireccion = 0; // -1 menor, 0 stop, 1 mayor
 unsigned long lastPrintTime = 0;
 const unsigned long printInterval = 200;
 
-// Debounce botones
-bool ultimoEstadoBoton[5] = {HIGH, HIGH, HIGH, HIGH, HIGH};
+// =======================
+// Debounce sin bloqueo
+// =======================
+bool ultimaLecturaBoton[5] = {HIGH, HIGH, HIGH, HIGH, HIGH};
+bool estadoEstableBoton[5] = {HIGH, HIGH, HIGH, HIGH, HIGH};
 unsigned long ultimoTiempoBoton[5] = {0, 0, 0, 0, 0};
 const unsigned long debounceDelay = 80;
 
@@ -121,9 +140,6 @@ void loop() {
 
   imprimirEstado(posicionActual, switchAbajo, switchArriba);
 
-  // Finales de carrera:
-  // Si se presiona uno, se mueve en direccion contraria
-  // hasta que se libere. Luego se detiene.
   if (manejarFinalesCarrera(switchAbajo, switchArriba)) {
     return;
   }
@@ -156,7 +172,7 @@ bool manejarFinalesCarrera(bool switchAbajo, bool switchArriba) {
       moverHaciaPotMayor(PWM_LIBERACION);
     } 
     else if (switchArriba && !switchAbajo) {
-      moverHaciaPotMenor(PWM_LIBERACION);
+      moverHaciaPotMenor(PWM_BAJANDO_MAX);
     } 
     else {
       detenerMotor();
@@ -177,26 +193,24 @@ bool manejarFinalesCarrera(bool switchAbajo, bool switchArriba) {
 }
 
 // =======================
-// Lectura de botones
+// Lectura de botones sin bloqueo
 // =======================
 void leerBotones() {
   for (int i = 0; i < 5; i++) {
     bool lectura = digitalRead(botonesPiso[i]);
 
-    if (lectura != ultimoEstadoBoton[i]) {
+    if (lectura != ultimaLecturaBoton[i]) {
       ultimoTiempoBoton[i] = millis();
-      ultimoEstadoBoton[i] = lectura;
+      ultimaLecturaBoton[i] = lectura;
     }
 
     if ((millis() - ultimoTiempoBoton[i]) > debounceDelay) {
-      if (lectura == LOW) {
-        seleccionarPiso(i + 1);
+      if (lectura != estadoEstableBoton[i]) {
+        estadoEstableBoton[i] = lectura;
 
-        while (digitalRead(botonesPiso[i]) == LOW) {
-          delay(10);
+        if (estadoEstableBoton[i] == LOW) {
+          seleccionarPiso(i + 1);
         }
-
-        ultimoEstadoBoton[i] = HIGH;
       }
     }
   }
@@ -246,8 +260,9 @@ void ejecutarPID(int posicionActual) {
 
   int referencia = pisoRef[pisoObjetivo - 1];
   float error = referencia - posicionActual;
+  int errorAbs = abs((int)error);
 
-  if (abs(error) <= TOLERANCIA) {
+  if (errorAbs <= TOLERANCIA) {
     detenerMotor();
     enMovimiento = false;
     pisoObjetivo = -1;
@@ -260,43 +275,65 @@ void ejecutarPID(int posicionActual) {
   integral += error * dt;
   integral = constrain(integral, -300.0, 300.0);
 
-  float derivada = (error - errorAnterior) / dt;
+  float derivada = 0.0;
+
+  if (primerCicloPID) {
+    derivada = 0.0;
+    primerCicloPID = false;
+  } else {
+    derivada = (error - errorAnterior) / dt;
+  }
+
   errorAnterior = error;
 
   float salidaPID = Kp * error + Ki * integral + Kd * derivada;
 
-  aplicarSalidaMotor(salidaPID, abs((int)error));
+  aplicarSalidaMotor(salidaPID, errorAbs);
 }
 
 void aplicarSalidaMotor(float salidaPID, int errorAbs) {
   int pwm;
 
-  if (errorAbs <= ZONA_LENTA) {
-    pwm = PWM_CERCA;
-  } else {
-    pwm = abs((int)salidaPID);
-    pwm = constrain(pwm, PWM_MIN, PWM_MAX);
-  }
-
   if (salidaPID > 0) {
+    // =======================
+    // Subiendo / POT MAYOR
+    // =======================
+    if (errorAbs <= ZONA_LENTA) {
+      pwm = PWM_CERCA;
+    } else {
+      pwm = abs((int)salidaPID);
+      pwm = constrain(pwm, PWM_MIN, PWM_MAX);
+    }
+
     moverHaciaPotMayor(pwm);
   } else {
+    // =======================
+    // Bajando / POT MENOR
+    // =======================
+    if (errorAbs <= ZONA_LENTA) {
+      pwm = PWM_BAJANDO_CERCA;
+    } else {
+      pwm = abs((int)salidaPID);
+      pwm = constrain(pwm, PWM_BAJANDO_MIN, PWM_BAJANDO_MAX);
+    }
+
     moverHaciaPotMenor(pwm);
   }
 }
 
 // =======================
 // Potenciometro
+// Igual que el codigo de prueba
 // =======================
 int leerPotPromediado() {
   long suma = 0;
 
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < 20; i++) {
     suma += analogRead(potPin);
     delay(2);
   }
 
-  return suma / 10;
+  return suma / 20;
 }
 
 // =======================
@@ -335,6 +372,7 @@ void detenerMotor() {
 void resetPID() {
   integral = 0.0;
   errorAnterior = 0.0;
+  primerCicloPID = true;
   lastPidTime = millis();
 }
 
@@ -366,7 +404,7 @@ void imprimirEstado(int posicionActual, bool switchAbajo, bool switchArriba) {
     if (ultimaDireccion == 1) {
       Serial.print("POT MAYOR");
     } else if (ultimaDireccion == -1) {
-      Serial.print("POT MENOR");
+      Serial.print("POT MENOR / BAJANDO");
     } else {
       Serial.print("STOP");
     }
