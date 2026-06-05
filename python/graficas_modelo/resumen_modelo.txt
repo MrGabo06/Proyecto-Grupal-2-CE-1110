@@ -1,0 +1,26 @@
+RESUMEN DEL MODELO MATEMÁTICO
+=============================
+
+Dirección: POT_MENOR
+PWM usado: 120
+Velocidad aproximada: -87.3934 ADC/s
+Ganancia firmada K: -0.728279 ADC/(s*PWM)
+Ganancia absoluta |K|: 0.728279 ADC/(s*PWM)
+Modelo continuo: G(s) = -0.728279 / s
+
+Dirección: POT_MAYOR
+PWM usado: 120
+Velocidad aproximada: 102.9462 ADC/s
+Ganancia firmada K: 0.857885 ADC/(s*PWM)
+Ganancia absoluta |K|: 0.857885 ADC/(s*PWM)
+Modelo continuo: G(s) = 0.857885 / s
+
+MODELO PROMEDIO
+K promedio: 0.793082 ADC/(s*PWM)
+G(s) = 0.793082 / s
+Ts = 0.050 s
+G(z) = 0.039654 / (z - 1)
+Polo continuo: s = 0
+Ceros continuos: ninguno
+Polo discreto: z = 1
+Ceros discretos: ninguno
